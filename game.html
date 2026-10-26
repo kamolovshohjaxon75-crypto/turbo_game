@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="uz"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>8-Ball Billiard</title>
+<style>
+:root{--bg:#e9edf2;--card:#fff;--fg:#1a222d;--mut:#6b7785;--acc:#c98a00;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#0f141b;--card:#1a222d;--fg:#e8eef5;--mut:#8a97a6;--acc:#f5c451}}
+:root[data-theme="dark"]{--bg:#0f141b;--card:#1a222d;--fg:#e8eef5;--mut:#8a97a6;--acc:#f5c451}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px}
+#hud{display:flex;gap:12px;width:100%;max-width:1000px}
+.pl{flex:1;background:var(--card);border:2px solid transparent;border-radius:12px;padding:8px 12px;opacity:.7;transition:.2s}
+.pl.on{border-color:var(--acc);opacity:1;box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 25%,transparent)}
+.pl b{font-size:15px}.pl .g{font-size:12px;color:var(--mut);margin-left:8px}
+.dots{display:flex;gap:5px;margin-top:6px;min-height:16px}
+.dots i{width:16px;height:16px;border-radius:50%;border:1px solid rgba(0,0,0,.4)}
+.dots i.d{opacity:.2}
+#wrap{width:100%;max-width:1000px}
+canvas{width:100%;height:auto;display:block;border-radius:18px;touch-action:none;cursor:crosshair;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+#bar{display:flex;gap:12px;align-items:center;width:100%;max-width:1000px}
+#msg{flex:1;font-size:15px;min-height:22px}
+button{background:var(--acc);color:#111;border:0;border-radius:10px;padding:9px 16px;font-weight:600;cursor:pointer;font-size:14px}
+.help{font-size:12px;color:var(--mut);max-width:1000px;text-align:center}
+#sp{width:58px;height:58px;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,.4);cursor:pointer}
+#bar{flex-wrap:wrap}#sc{font-weight:700;color:var(--acc);white-space:nowrap}
+</style></head><body>
+<div id="hud">
+<div class="pl" id="p0"><b>1-oʻyinchi</b><span class="g"></span><div class="dots"></div></div>
+<div class="pl" id="p1"><b>2-oʻyinchi</b><span class="g"></span><div class="dots"></div></div>
+</div>
+<div id="wrap"><canvas id="c" width="1000" height="560"></canvas></div>
+<div id="bar"><canvas id="sp" width="64" height="64" title="Oq sharga urish nuqtasi (spin). Ikki marta bosing — tiklash"></canvas><div id="msg"></div><span id="sc"></span><button id="bt">🤖 Botga qarshi</button><button id="un">↩ Bekor</button><button id="sn">🔊</button><button id="rs">Qayta boshlash</button></div>
+<div class="help">Yangi: ←/→ tugmalari aniq mo‘ljal (Shift — juda aniq) · chap tomondagi doira — spin: tepaga bossangiz shar oldinga, pastga bossangiz orqaga qaytadi, yonga bossangiz bandadan keyin buriladi.</div>
+<div class="help">Sichqoncha bilan mo‘ljallang · bosib ushlang (yoki Space) — kuch ortadi · qo‘yib yuboring — zarba. Foul bo‘lsa, raqib oq sharni xohlagan joyga qo‘yadi.</div>
+<script>
+let X=document.getElementById('c').getContext('2d');const C=document.getElementById('c'),W=1000,H=560,L=60,T=60,R=940,B=500,BR=11,F=0.99838;
+const COL=['#fff','#f2c200','#1f4fbf','#d6281f','#6a2c91','#f07a12','#1b8a3d','#7a1f1f','#111'];
+const col=n=>COL[n>8?n-8:n];
+const PK=[[L,T,20],[500,T-3,18],[R,T,20],[L,B,20],[500,B+3,18],[R,B,20]];
+let balls,cue,turn,groups,phase,pw,pd,ang,m={x:500,y:280},first,railAfter,pocketed,canEight,brk,msg='',winner=-1;
+const $=id=>document.getElementById(id);
+let bot=false,botBusy=false,snap=null,AC,mute=false,spin={x:0,y:0},score=[0,0],parts=[],TB;
+function snd(f,d,v,ty){if(mute)return;try{AC=AC||new AudioContext();const o=AC.createOscillator(),g=AC.createGain();o.type=ty||'sine';o.frequency.value=f;g.gain.setValueAtTime(Math.min(Math.max(v,.02),.4),AC.currentTime);g.gain.exponentialRampToValueAtTime(.001,AC.currentTime+d);o.connect(g);g.connect(AC.destination);o.start();o.stop(AC.currentTime+d)}catch(e){}}
+function burst(x,y,c){for(let i=0;i<16;i++){const a=Math.random()*6.28,s=1+Math.random()*3;parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,l:1,c})}}
+function rot3(v,kx,ky,a){const c=Math.cos(a),s=Math.sin(a),[x,y,z]=v,dt=kx*x+ky*y;return[x*c+ky*z*s+kx*dt*(1-c),y*c-kx*z*s+ky*dt*(1-c),z*c+(kx*y-ky*x)*s]}
+function roll(b,dx,dy){const d=Math.hypot(dx,dy);if(!d)return;const kx=-dy/d,ky=dx/d,a=d/BR;b.v=rot3(b.v||[0,0,1],kx,ky,a);b.w=rot3(b.w||[0,1,0],kx,ky,a)}
+function drawSpin(){const s=$('sp').getContext('2d');s.clearRect(0,0,64,64);s.fillStyle='#f6f6ee';s.beginPath();s.arc(32,32,30,0,7);s.fill();s.strokeStyle='#aaa';s.beginPath();s.moveTo(32,4);s.lineTo(32,60);s.moveTo(4,32);s.lineTo(60,32);s.stroke();s.fillStyle='#d22';s.beginPath();s.arc(32+spin.x*24,32-spin.y*24,5,0,7);s.fill()}
+const name=i=>bot&&i==1?'Kompyuter':(i+1)+'-oʻyinchi';
+function setMsg(s){msg=s;$('msg').textContent=s}
+function init(){
+ balls=[];cue={x:250,y:280,vx:0,vy:0,n:0,in:false};balls.push(cue);
+ const d=BR*2+.5,order=[...[1,2,3,4,5,6,7,9,10,11,12,13,14,15]].sort(()=>Math.random()-.5);
+ order.splice(4,0,8);let k=0;
+ for(let r=0;r<5;r++)for(let j=0;j<=r;j++){const n=order[k++];balls[n]={x:690+r*d*.866,y:280+(j-r/2)*d,vx:0,vy:0,n,in:false}}
+ turn=0;groups=[null,null];phase='aim';pw=0;pd=1;ang=Math.PI;brk=true;winner=-1;pocketed=[];spin={x:0,y:0};parts=[];
+ setMsg('1-oʻyinchi zarba beradi (ochilish zarbasi).');hud()}
+function own(b,t){return groups[t]==(b.n>8?'stripe':'solid')}
+function remaining(t){return balls.filter(b=>b.n>0&&b.n!=8&&!b.in&&own(b,t)).length}
+function hud(){$('sc').textContent='🏆 '+score[0]+' : '+score[1];for(let i=0;i<2;i++){const e=$('p'+i);e.querySelector('b').textContent=name(i);e.classList.toggle('on',turn==i&&phase!='over');
+ e.querySelector('.g').textContent=groups[i]?(groups[i]=='solid'?'Toʻliq (1–7)':'Yoʻl-yoʻl (9–15)'):'guruh: ochiq';
+ let h='';if(groups[i]){const s=groups[i]=='solid'?1:9;for(let n=s;n<s+7;n++){const c=col(n);h+=`<i class="${balls[n].in?'d':''}" style="background:${n>8?`linear-gradient(#fff 25%,${c} 25% 75%,#fff 75%)`:c}"></i>`}}
+ e.querySelector('.dots').innerHTML=h}}
+function sub(){
+ const act=balls.filter(b=>!b.in);
+ for(const b of act){b.x+=b.vx/8;b.y+=b.vy/8;roll(b,b.vx/8,b.vy/8);
+  for(const p of PK)if(Math.hypot(b.x-p[0],b.y-p[1])<p[2]){b.in=true;b.vx=b.vy=0;pocketed.push(b);snd(70,.3,.35);burst(p[0],p[1],col(b.n));break}
+  if(b.in)continue;
+  let hit=false;
+  if(b.x<L+BR){b.x=L+BR;b.vx=-b.vx*.78;hit=true}if(b.x>R-BR){b.x=R-BR;b.vx=-b.vx*.78;hit=true}
+  if(b.y<T+BR){b.y=T+BR;b.vy=-b.vy*.78;hit=true}if(b.y>B-BR){b.y=B-BR;b.vy=-b.vy*.78;hit=true}
+  if(hit){if(first)railAfter=true;snd(110,.08,.15);if(b===cue&&cue.sx){const s=Math.hypot(b.vx,b.vy),a2=Math.atan2(b.vy,b.vx)+cue.sx*.25;b.vx=Math.cos(a2)*s;b.vy=Math.sin(a2)*s;cue.sx*=.5}}
+  b.vx*=F;b.vy*=F;if(Math.hypot(b.vx,b.vy)<.05)b.vx=b.vy=0}
+ const a=balls.filter(b=>!b.in);
+ for(let i=0;i<a.length;i++)for(let j=i+1;j<a.length;j++){const p=a[i],q=a[j];
+  let dx=q.x-p.x,dy=q.y-p.y,dd=Math.hypot(dx,dy);if(dd>=2*BR||dd==0)continue;
+  const nx=dx/dd,ny=dy/dd,ov=2*BR-dd;p.x-=nx*ov/2;p.y-=ny*ov/2;q.x+=nx*ov/2;q.y+=ny*ov/2;
+  const rel=(p.vx-q.vx)*nx+(p.vy-q.vy)*ny;
+  if(rel>0){p.vx-=rel*nx;p.vy-=rel*ny;q.vx+=rel*nx;q.vy+=rel*ny;if(!first&&(p===cue||q===cue)&&cue.sp){cue.vx+=cue.dx*cue.sp*rel*.7;cue.vy+=cue.dy*cue.sp*rel*.7;cue.sp=0}snd(300+Math.random()*80,.06,rel/25,'triangle');
+   if(!first){if(p===cue)first=q;else if(q===cue)first=p}}}}
+const moving=()=>balls.some(b=>!b.in&&(b.vx||b.vy));
+function shoot(){if(!(bot&&turn==1))save();const s=2+pw*30;cue.vx=Math.cos(ang)*s;cue.vy=Math.sin(ang)*s;cue.dx=Math.cos(ang);cue.dy=Math.sin(ang);cue.sp=spin.y;cue.sx=spin.x;snd(200,.08,.3,'square');
+ first=null;railAfter=false;pocketed=[];canEight=!!groups[turn]&&remaining(turn)==0;phase='roll';pw=0;setMsg('')}
+function over(w,t){winner=w;score[w]++;phase='over';snd(660,.4,.3);setMsg(t);hud()}
+function endShot(){
+ const t=turn,o=1-t;let foul=false,fm='';
+ const eight=pocketed.find(b=>b.n==8);
+ const okT=b=>groups[t]?(canEight?b.n==8:own(b,t)):b.n!=8;
+ if(cue.in){foul=true;fm='Oq shar choʻntakka tushdi'}
+ else if(!first){foul=true;fm='Hech qaysi shar bilan toʻqnashmadi'}
+ else if(!okT(first)){foul=true;fm='Notoʻgʻri shar bilan toʻqnashdi'}
+ else if(!pocketed.length&&!railAfter){foul=true;fm='Hech qaysi shar bandaga tegmadi'}
+ if(eight){
+  if(brk){eight.in=false;eight.x=690+2*(BR*2+.5)*.866;eight.y=280;eight.vx=eight.vy=0;pocketed=pocketed.filter(b=>b!==eight)}
+  else{const win=!foul&&canEight&&remaining(t)==0;
+   return over(win?t:o,win?`${name(t)} 8-sharni toʻgʻri tushirdi — gʻalaba! 🎉`:`${name(t)} 8-sharni xato tushirdi — ${name(o)} gʻalaba qozondi! 🎉`)}}
+ const pk=pocketed.filter(b=>b.n>0&&b.n!=8);
+ if(!groups[t]&&!foul&&pk.length){const ty=pk[0].n>8?'stripe':'solid';groups[t]=ty;groups[o]=ty=='solid'?'stripe':'solid'}
+ const keep=!foul&&pk.some(b=>own(b,t));
+ brk=false;
+ if(foul){turn=o;cue.in=false;cue.vx=cue.vy=0;cue.x=m.x;cue.y=m.y;phase='place';setMsg(`FOUL: ${fm}. ${name(o)} oq sharni xohlagan joyga qoʻyadi (bosing).`)}
+ else if(keep){phase='aim';setMsg(`Yaxshi zarba! ${name(t)} yana uradi.`)}
+ else{turn=o;phase='aim';setMsg(`${name(o)} navbati.`)}
+ hud()}
+function valid(x,y){if(x<L+BR||x>R-BR||y<T+BR||y>B-BR)return false;return balls.every(b=>b===cue||b.in||Math.hypot(b.x-x,b.y-y)>2*BR)}
+function pos(e){const r=C.getBoundingClientRect();return{x:(e.clientX-r.left)*W/r.width,y:(e.clientY-r.top)*H/r.height}}
+function startCharge(){if(phase!='aim'||(bot&&turn==1))return;ang=Math.atan2(m.y-cue.y,m.x-cue.x);phase='charge';pw=0;pd=1}
+function release(){if(phase!='charge')return;if(pw<.03){phase='aim';return}shoot()}
+C.addEventListener('pointermove',e=>{m=pos(e);if(phase=='place'){cue.x=Math.min(R-BR,Math.max(L+BR,m.x));cue.y=Math.min(B-BR,Math.max(T+BR,m.y))}});
+C.addEventListener('pointerdown',e=>{m=pos(e);if(bot&&turn==1)return;if(phase=='place'){cue.x=Math.min(R-BR,Math.max(L+BR,m.x));cue.y=Math.min(B-BR,Math.max(T+BR,m.y));if(valid(cue.x,cue.y)){phase='aim';setMsg(`${name(turn)} navbati.`)}}else startCharge()});
+addEventListener('pointerup',release);
+addEventListener('keydown',e=>{if(e.code=='Space'){e.preventDefault();if(!e.repeat)startCharge()}if((e.code=='ArrowLeft'||e.code=='ArrowRight')&&phase=='aim'){e.preventDefault();const a=ang+(e.code=='ArrowLeft'?-1:1)*(e.shiftKey?.002:.01);m={x:cue.x+Math.cos(a)*300,y:cue.y+Math.sin(a)*300}}});
+addEventListener('keyup',e=>{if(e.code=='Space')release()});
+$('rs').onclick=init;
+$('un').onclick=undo;
+$('bt').onclick=()=>{bot=!bot;$('bt').textContent=bot?'👥 Doʻst bilan':'🤖 Botga qarshi';init()};
+function save(){snap={b:balls.map(b=>({...b})),turn,groups:[...groups],brk}}
+function undo(){if(!snap||phase=='roll'||phase=='charge')return;if(phase=='over'){score[winner]--}balls=snap.b.map(b=>({...b}));cue=balls[0];turn=snap.turn;groups=[...snap.groups];brk=snap.brk;phase='aim';winner=-1;hud();setMsg('Oxirgi zarba bekor qilindi. '+name(turn)+' qayta uradi.')}
+function segd(px,py,ax,ay,bx,by){const dx=bx-ax,dy=by-ay,l=dx*dx+dy*dy||1;let t=((px-ax)*dx+(py-ay)*dy)/l;t=Math.max(0,Math.min(1,t));return Math.hypot(px-ax-t*dx,py-ay-t*dy)}
+function botPlay(){botBusy=false;if(!bot||turn!=1)return;
+ if(phase=='place'){for(let i=0;i<200;i++){const x=L+BR+Math.random()*(R-L-2*BR),y=T+BR+Math.random()*(B-T-2*BR);if(valid(x,y)){cue.x=x;cue.y=y;break}}phase='aim';botBusy=true;setTimeout(botPlay,700);return}
+ if(phase!='aim')return;
+ const ce=!!groups[1]&&remaining(1)==0,ok=b=>!b.in&&b!==cue&&(groups[1]?(ce?b.n==8:own(b,1)):b.n!=8);
+ let best=null;
+ for(const tb of balls.filter(ok))for(const p of PK){
+  const ux=p[0]-tb.x,uy=p[1]-tb.y,ul=Math.hypot(ux,uy),nx=ux/ul,ny=uy/ul,gx=tb.x-nx*2*BR,gy=tb.y-ny*2*BR;
+  if(gx<L+BR||gx>R-BR||gy<T+BR||gy>B-BR)continue;
+  const cx=gx-cue.x,cy=gy-cue.y,cl=Math.hypot(cx,cy);if(cl<1)continue;
+  const cut=(cx*nx+cy*ny)/cl;if(cut<.35)continue;
+  if(balls.some(o=>o!==cue&&o!==tb&&!o.in&&(segd(o.x,o.y,cue.x,cue.y,gx,gy)<1.9*BR||segd(o.x,o.y,tb.x,tb.y,p[0],p[1])<1.9*BR)))continue;
+  const s=cut*2-(cl+ul)/900;if(!best||s>best.s)best={s,a:Math.atan2(cy,cx),d:cl+ul}}
+ if(!best){const tg=balls.filter(ok).sort((a,b)=>Math.hypot(a.x-cue.x,a.y-cue.y)-Math.hypot(b.x-cue.x,b.y-cue.y))[0];
+  best={a:tg?Math.atan2(tg.y-cue.y,tg.x-cue.x):Math.random()*6.28,d:300}}
+ ang=best.a+(Math.random()-.5)*.03;pw=brk?.95:Math.min(.9,Math.max(.3,best.d/800+.2));spin={x:0,y:0};shoot()}
+$('sn').onclick=()=>{mute=!mute;$('sn').textContent=mute?'🔇':'🔊'};
+$('sp').onpointerdown=e=>{const r=e.target.getBoundingClientRect();let x=((e.clientX-r.left)/r.width-.5)*2,y=-((e.clientY-r.top)/r.height-.5)*2;const l=Math.hypot(x,y);if(l>.8){x*=.8/l;y*=.8/l}spin={x:x/.8,y:y/.8}};
+$('sp').ondblclick=()=>{spin={x:0,y:0}};
+function ray(a){const dx=Math.cos(a),dy=Math.sin(a);let x=cue.x,y=cue.y;
+ for(let s=0;s<1800;s+=2){x+=dx*2;y+=dy*2;
+  for(const b of balls){if(b===cue||b.in)continue;if(Math.hypot(b.x-x,b.y-y)<2*BR)return{x,y,b}}
+  if(x<L+BR||x>R-BR||y<T+BR||y>B-BR)return{x,y}}
+ return{x,y}}
+function drawBall(b){const{x,y,n}=b;X.save();X.translate(x,y);
+ X.fillStyle='rgba(0,0,0,.35)';X.beginPath();X.ellipse(3,4,BR,BR*.9,0,0,7);X.fill();
+ X.beginPath();X.arc(0,0,BR,0,7);X.clip();
+ X.fillStyle=n>8||n==0?'#f6f6ee':col(n);X.fillRect(-BR,-BR,2*BR,2*BR);
+ if(n>8){const w=b.w||[0,1,0];X.save();X.rotate(Math.atan2(-w[0],w[1]));X.fillStyle=col(n);X.fillRect(-2*BR,-BR*.55,4*BR,BR*1.1);X.restore()}
+ const v=b.v||[0,0,1];if(v[2]>0){X.save();X.translate(v[0]*BR*.9,v[1]*BR*.9);X.scale(v[2]*.9+.1,v[2]);if(n>0){X.fillStyle='#fff';X.beginPath();X.arc(0,0,5,0,7);X.fill();X.fillStyle='#111';X.font='bold 7px sans-serif';X.textAlign='center';X.textBaseline='middle';X.fillText(n,0,.5)}else{X.fillStyle='#d22';X.beginPath();X.arc(0,0,1.8,0,7);X.fill()}X.restore()}
+ const g=X.createRadialGradient(-4,-4,1,0,0,BR);g.addColorStop(0,'rgba(255,255,255,.75)');g.addColorStop(.35,'rgba(255,255,255,0)');g.addColorStop(1,'rgba(0,0,0,.35)');
+ X.fillStyle=g;X.fillRect(-BR,-BR,2*BR,2*BR);X.restore()}
+function table(){if(!TB){TB=document.createElement('canvas');TB.width=W;TB.height=H;const o=X;X=TB.getContext('2d');tableRaw();X=o}X.drawImage(TB,0,0)}
+function tableRaw(){
+ let g=X.createLinearGradient(0,0,0,H);g.addColorStop(0,'#7a4a24');g.addColorStop(.5,'#5a3216');g.addColorStop(1,'#3d210d');
+ X.fillStyle=g;X.beginPath();X.roundRect(0,0,W,H,26);X.fill();X.strokeStyle='rgba(0,0,0,.14)';X.lineWidth=1;for(let i=0;i<70;i++){const y=Math.random()*H;X.beginPath();X.moveTo(0,y);X.bezierCurveTo(300,y+Math.random()*8-4,700,y+Math.random()*8-4,W,y);X.stroke()}
+ X.fillStyle='#173b25';X.beginPath();X.roundRect(L-30,T-30,R-L+60,B-T+60,14);X.fill();
+ g=X.createRadialGradient(500,280,60,500,280,520);g.addColorStop(0,'#1f9a5a');g.addColorStop(1,'#0e5c33');
+ X.fillStyle=g;X.fillRect(L,T,R-L,B-T);for(let i=0;i<9000;i++){X.fillStyle=Math.random()<.5?'rgba(255,255,255,.035)':'rgba(0,0,0,.05)';X.fillRect(L+Math.random()*(R-L),T+Math.random()*(B-T),1.5,1.5)}g=X.createRadialGradient(500,280,200,500,280,560);g.addColorStop(0,'rgba(255,255,220,.10)');g.addColorStop(1,'rgba(0,0,0,.35)');X.fillStyle=g;X.fillRect(L,T,R-L,B-T);
+ X.fillStyle='#e9d9a8';
+ for(let k=1;k<8;k++)if(k!=4){for(const y of[T-45,B+45]){X.beginPath();X.arc(L+(R-L)*k/8,y,3,0,7);X.fill()}}
+ for(let k=1;k<4;k++)for(const x of[L-45,R+45]){X.beginPath();X.arc(x,T+(B-T)*k/4,3,0,7);X.fill()}
+ X.strokeStyle='rgba(255,255,255,.12)';X.lineWidth=1.5;X.beginPath();X.moveTo(250,T);X.lineTo(250,B);X.stroke();
+ X.fillStyle='rgba(255,255,255,.18)';X.beginPath();X.arc(690,280,3,0,7);X.fill();
+ for(const p of PK){X.fillStyle='#050805';X.beginPath();X.arc(p[0],p[1],p[2]-3,0,7);X.fill();X.strokeStyle='#b8860b';X.lineWidth=3;X.stroke()}}
+function draw(){
+ table();
+ for(const b of balls)if(!b.in&&b!==cue)drawBall(b);
+ if(phase=='aim'||phase=='charge'||phase=='place'){const ce=!!groups[turn]&&remaining(turn)==0;for(const b of balls){if(b.in||b===cue)continue;const okb=groups[turn]?(ce?b.n==8:own(b,turn)):b.n!=8;if(!okb){X.save();X.lineCap='round';for(const[c,w]of[['rgba(0,0,0,.65)',5],['#ff3b30',2.6]]){X.strokeStyle=c;X.lineWidth=w;X.beginPath();X.moveTo(b.x-6,b.y-6);X.lineTo(b.x+6,b.y+6);X.moveTo(b.x+6,b.y-6);X.lineTo(b.x-6,b.y+6);X.stroke()}X.restore()}}}
+ parts=parts.filter(p=>p.l>0);for(const p of parts){p.x+=p.vx;p.y+=p.vy;p.l-=.03;X.globalAlpha=Math.max(p.l,0);X.fillStyle=p.c;X.beginPath();X.arc(p.x,p.y,2.5,0,7);X.fill()}X.globalAlpha=1;drawSpin();
+ if(!cue.in||phase=='place'){
+  if(phase=='place'){X.globalAlpha=valid(cue.x,cue.y)?.9:.4}
+  drawBall(cue);X.globalAlpha=1}
+ if(phase=='aim'||phase=='charge'){
+  const a=phase=='charge'?ang:Math.atan2(m.y-cue.y,m.x-cue.x);ang=a;
+  const r=ray(a);X.strokeStyle='rgba(255,255,255,.7)';X.setLineDash([6,6]);X.lineWidth=1.5;
+  X.beginPath();X.moveTo(cue.x,cue.y);X.lineTo(r.x,r.y);X.stroke();X.setLineDash([]);
+  X.beginPath();X.arc(r.x,r.y,BR,0,7);X.stroke();
+  if(r.b){const dx=r.b.x-r.x,dy=r.b.y-r.y,d=Math.hypot(dx,dy)||1;X.beginPath();X.moveTo(r.b.x,r.b.y);X.lineTo(r.b.x+dx/d*60,r.b.y+dy/d*60);X.stroke()}
+  const pull=(phase=='charge'?pw:0)*90+8;
+  X.save();X.translate(cue.x,cue.y);X.rotate(a);X.translate(-(BR+pull),0);
+  const gr=X.createLinearGradient(-320,0,0,0);gr.addColorStop(0,'#2b1809');gr.addColorStop(.4,'#8b5a2b');gr.addColorStop(1,'#ecc98e');
+  X.shadowColor='rgba(0,0,0,.45)';X.shadowBlur=8;X.shadowOffsetY=5;
+  const seg=(x0,x1,w0,w1,f)=>{X.fillStyle=f;X.beginPath();X.moveTo(x0,-w0/2);X.lineTo(x1,-w1/2);X.lineTo(x1,w1/2);X.lineTo(x0,w0/2);X.fill()};
+  seg(-4,0,5,5,'#5ab7e0');seg(-16,-4,5,5.2,'#f4f1e6');seg(-170,-16,5.2,7.6,gr);seg(-176,-170,7.6,7.8,'#caa24a');seg(-300,-176,7.8,9.6,'#1b1b1f');seg(-306,-300,9.6,9.8,'#caa24a');seg(-380,-306,9.8,11,'#2b1809');
+  X.shadowColor='transparent';X.fillStyle='rgba(255,255,255,.22)';X.fillRect(-380,-3.5,380,1.5);X.restore()}
+ if(phase=='charge'){X.fillStyle='rgba(0,0,0,.5)';X.fillRect(L,H-34,300,12);
+  X.fillStyle=`hsl(${120-pw*120},80%,50%)`;X.fillRect(L,H-34,300*pw,12);
+  X.fillStyle='#fff';X.font='12px sans-serif';X.textAlign='left';X.fillText('Kuch',L+310,H-24)}
+ if(phase=='over'){X.fillStyle='rgba(0,0,0,.6)';X.fillRect(L,230,R-L,100);X.fillStyle='#f5c451';X.font='bold 30px sans-serif';X.textAlign='center';X.fillText(`${name(winner)} gʻalaba qildi! 🏆`,500,288)}}
+function loop(){
+ if(phase=='charge'){pw+=pd*.016;if(pw>=1){pw=1;pd=-1}if(pw<=0){pw=0;pd=1}}
+ if(phase=='roll'){for(let i=0;i<8;i++)sub();if(!moving())endShot()}
+ if(bot&&turn==1&&!botBusy&&(phase=='aim'||phase=='place')){botBusy=true;setTimeout(botPlay,900)}
+ draw();requestAnimationFrame(loop)}
+init();loop();
+</script></body></html>
